@@ -1,10 +1,17 @@
 var http = require('http');
 var mongoose = require('mongoose');
 var express = require('express');
+var Q = require('q');
 var request = require('request');
-
 var app = express();
+var bodyParser = require("body-parser");
 var db;
+var AccountRepository = require("./repositories/AccountRepository")
+var SecurityToken = require('./infrastructure/securityToken');
+
+app.use(bodyParser.json({
+  extended: true
+}));
 
 var config = {
 	"USER"     : "",
@@ -21,17 +28,25 @@ var dbPath  = "mongodb://"+config.USER + ":"+
 	config.DATABASE;
 
 function handleFacebookMobileLoginRequest(req, res) {
-	var facebookAcessToken = req.body.fbToken;
+	console.log('handleFacebookRequest\n');
+	var facebookAccessToken = req.body.fbToken;
 	var applicationName = req.body.appName;
+	console.log(req.headers);
+	console.log(req.body);
 	if (facebookAccessToken && facebookAccessToken.length > 0 && applicationName && applicationName.length > 0) {
 		verifyFacebookUserAccessToken(facebookAccessToken).
-			then(function(user) {
+			then(function(user) { 
+				console.log("Success!");
 				performFacebookLogin(applicationName, user, facebookAccessToken).
-					then(function(loginViewModel) {
-						//Add logging and res
-						//
+					then(function(apiToken) {
+						console.log("Did all of it")
+						res.send("{\"token\":\"" + apiToken + "\"}");
+
 					});
 			}, function (error) {
+				console.log("Failed!");
+				res.send("{\"result\":\"Failed!\"}");
+
 				//log error...
 			}
 		).fail(function(error){
@@ -43,21 +58,26 @@ function handleFacebookMobileLoginRequest(req, res) {
 }
 
 function verifyFacebookUserAccessToken(token) {
+	console.log("verifyFacebookUserAccessToken()")
 	var deferred = Q.defer();
 	var path = 'https://graph.facebook.com/me?access_token=' + token;
 	request(path, function (error, response, body) {
 		var data = JSON.parse(body);
+		console.log("request");
+		console.log(data);
 		if (!error && response && response.statusCode == 200) {
 			var user = {
 				facebookUserId: data.id,
-				username: data.username,
 				firstName: data.first_name,
 				lastName: data.last_name,
 				email: data.email
 			};
+			console.log("resolving request");
 			deferred.resolve(user);
 		}
 		else {
+			console.log("errored out");
+			deferred.reject();
 			//logA
 			//
 		}
@@ -65,8 +85,48 @@ function verifyFacebookUserAccessToken(token) {
 	return deferred.promise;
 }
 
+function performFacebookLogin(appName, userProfile, fbAccessToken) {
+	console.log("pfl start");
+	var deferred = Q.defer();
+	if (appName && userProfile && fbAccessToken) {
+		console.log("going to create accountRepository");
+		var accountRepository = new AccountRepository();
+		console.log("test");
+		console.log(userProfile);
 
+		console.log("done");
+		accountRepository.findOrCreateAccount(userProfile.facebookUserId, userProfile.email, userProfile.firstName, userProfile.lastName).then(function(account) {
+			console.log("found");
+			if (account.facebookUserId != userProfile.facebookUserId) {
+				deferred.reject(new Error("Invalid token"));
+			}
+			else {
+				if (account.hasChanged(userProfile.firstName, userProfile.lastName, userProfile.email)) {
+					accountRepository.updateAccount({
+						firstName: userProfile.firstName,
+						lastName: userProfile.lastName,
+						email: userProfile.email
+					});
+				}
+				console.log("going to create a securityToken")
+				//var apiAccessToken = new ApiAccessToken(account._id, appName);
+				var securityToken = SecurityToken.createFromUserIdAndFacebookToken(account._id, fbAccessToken)
+				console.log("done creating")
+				
+				SecurityToken.saveSecurityToken(securityToken).then(function(savedSecurityToken){
+					//var loginViewModel = new LoginViewModel(account._id, account.username, account.firstName, account.lastName, apiAccessToken.accessToken);
+					//accountRepository.updateLastLoginDate(account, Date.now());
+					console.log("returning");
+					var apiToken = savedSecurityToken.apiAccessToken;
+					console.log(apiToken);
+					deferred.resolve(apiToken);
+				});
+			}
+		})
+	}
+	return deferred.promise;
 
+}
 
 
 var standardGreeting = 'Hello World!';
@@ -84,6 +144,7 @@ var userSchema = new mongoose.Schema({
 	Token: String,
 });
 	
+app.post('/api/auth/facebook', handleFacebookMobileLoginRequest);
 
 //var Greeting= mongoose.model('greeting', greetingSchema);
 
