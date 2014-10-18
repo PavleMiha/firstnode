@@ -7,12 +7,16 @@ var app = express();
 var bodyParser = require("body-parser");
 var db;
 var AccountRepository = require("./repositories/AccountRepository")
+var EventRepository = require("./repositories/EventRepository")
+var path = require("path")
 var SecurityToken = require('./infrastructure/securityToken');
-
+var FileDriver = require('./infrastructure/FileDriver')
+var moment = require('moment');
+var busboy = require('connect-busboy');
 app.use(bodyParser.json({
-  extended: true
+  extended: true,
 }));
-
+app.use(busboy());
 var config = {
 	"USER"     : "",
 	"PASS"     : "",
@@ -26,6 +30,46 @@ var dbPath  = "mongodb://"+config.USER + ":"+
 	config.HOST + ":"+
 	config.PORT + "/"+
 	config.DATABASE;
+function postEvent(req, res) {
+	console.log('postEvent\n');
+	
+	var eventRepository = new EventRepository();
+	
+	var date = moment(req.body.date, 'YYYY-MM-DD HH:mm');
+	eventRepository.createEvent(req.body.title, req.body.description, date, req.body.imageID).then(
+		function() {
+			console.log("ASDFASDFASDFASDFDONE");
+		})
+	console.log(date.toDate());
+	res.send("{\"result\":\"success\"}");
+
+
+}
+function getEventsForDate(req, res) {
+	console.log('getEventsForData\n');
+	
+	console.log(req.body);
+
+	var apiAccessToken = req.body.token;
+	var dateString = req.body.date;
+	
+	var date = moment(dateString, 'YYYY-MM-DD HH:mm');
+	var endDate = moment(dateString, 'YYYY-MM-DD HH:mm').add(2, 'days');
+	console.log(date);
+	
+	var eventRepository = new EventRepository();
+	
+	eventRepository.findInDates(date.toDate(), endDate.toDate()).then(
+		function(list) {
+			console.log("FIND WORKED\n")
+			console.log(JSON.stringify(list))
+			res.send(JSON.stringify(list));
+		}, function (error) {
+			console.log("FIND FAILED\n")
+			res.send("{\"token\":\"complete fuckup of the heart\"}");
+		}
+ 	);
+}
 
 function handleFacebookMobileLoginRequest(req, res) {
 	console.log('handleFacebookRequest\n');
@@ -127,29 +171,20 @@ function performFacebookLogin(appName, userProfile, fbAccessToken) {
 	return deferred.promise;
 
 }
+app.post('/api/postevent', postEvent);
+app.post('/api/getevents', getEventsForDate);
 
-
-var standardGreeting = 'Hello World!';
-
-var eventSchema = new mongoose.Schema({
-	Name: String,
-	Description: String,
-	Source: String,
-	URL: String,
-	image: String
-});
-
-var userSchema = new mongoose.Schema({
-	Email: String,
-	Token: String,
-});
-	
 app.post('/api/auth/facebook', handleFacebookMobileLoginRequest);
 
 //var Greeting= mongoose.model('greeting', greetingSchema);
 
 db = mongoose.connect(dbPath);
+var fileDriver = new FileDriver(db);
+app.use(express.static(path.join(__dirname, 'public')));
 
+ 
+app.post('/files', function(req,res) {fileDriver.handleUploadRequest(req,res);});
+app.get('/files/:id', function(req, res) {fileDriver.handleGet(req,res);});
 mongoose.connection.once('open', function() {
 	console.log('once connection happening!\n');
 	/*var greeting;
